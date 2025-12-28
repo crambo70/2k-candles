@@ -1,0 +1,342 @@
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                    DMX FIRE CONTROLLER ARCHITECTURE                           ║
+║                          1,500 Candles System                                 ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           HARDWARE DATA FLOW                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────┐         ┌──────────────────┐         ┌─────────────────┐
+  │  DMX Console │ USB     │  ENTTEC DMX USB  │ Serial  │  macOS Computer │
+  │              │────────▶│   Pro Mk2        │────────▶│  Fire Controller│
+  │ (Lighting    │  XLR    │  (Serial Adapter)│  /dev/  │   (Python)      │
+  │  Desk)       │         │                  │  tty.*  │                 │
+  └──────────────┘         └──────────────────┘         └────────┬────────┘
+                                                                  │
+       DMX Universe 1                                            │ sACN
+       Channels 1-6:                                             │ Network
+       • Ch 1: Bank 1 Intensity      (0-255)                     │ (UDP)
+       • Ch 2: Bank 2 Intensity      (0-255)                     │
+       • Ch 3: Bank 3 Intensity      (0-255)                     │
+       • Ch 4: Flicker Intensity     (0-255)                     ▼
+       • Ch 5: Yellow→Red Shift      (0-255)          ┌────────────────────┐
+       • Ch 6: Blue Component        (0-255)          │   WLED Device      │
+                                                      │  192.168.4.74      │
+                                                      │                    │
+                                                      │  1,500 RGB LEDs    │
+                                                      │  (WS2812B strip)   │
+                                                      └────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         SOFTWARE ARCHITECTURE                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │                      DMXFireController (Main Loop)                       │
+  │                           Target: 60 FPS                                 │
+  └──────────────────────────────────────────────────────────────────────────┘
+           │                            │                          │
+           ▼                            ▼                          ▼
+  ┌─────────────────┐         ┌──────────────────┐      ┌──────────────────┐
+  │ DMX Input Layer │         │  Fire Effects    │      │  sACN Output     │
+  │                 │         │  Rendering       │      │  Layer           │
+  │ • Poll serial   │────────▶│                  │─────▶│                  │
+  │ • Drain buffer  │  Values │ • 3 Flame Banks  │ RGB  │ • 9 Universes    │
+  │ • Hysteresis    │         │ • Color control  │ Data │ • Unicast to IP  │
+  │ • Smooth ramp   │         │ • Flicker ctrl   │      │ • 512 ch each    │
+  └─────────────────┘         └──────────────────┘      └──────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         LED BANK ORGANIZATION                               │
+│                         (1,500 Total Pixels)                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │ FLAME BANK 1: 500 pixels (DMX Ch 1)                                     │
+  │ Pixels: 0 ───────────────────────────────────────────────────▶ 499      │
+  │ [🔥][🔥][🔥][🔥][🔥]...(500 independent fire pixels)...[🔥][🔥][🔥]      │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │ FLAME BANK 2: 500 pixels (DMX Ch 2)                                     │
+  │ Pixels: 500 ─────────────────────────────────────────────────▶ 999      │
+  │ [🔥][🔥][🔥][🔥][🔥]...(500 independent fire pixels)...[🔥][🔥][🔥]      │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │ FLAME BANK 3: 500 pixels (DMX Ch 3)                                     │
+  │ Pixels: 1000 ────────────────────────────────────────────────▶ 1499     │
+  │ [🔥][🔥][🔥][🔥][🔥]...(500 independent fire pixels)...[🔥][🔥][🔥]      │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         sACN UNIVERSE MAPPING                               │
+│                    (170 LEDs per Universe @ 3ch RGB)                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  Universe 1: Pixels    0 - 169   (510 channels: R,G,B × 170)
+  Universe 2: Pixels  170 - 339   (510 channels: R,G,B × 170)
+  Universe 3: Pixels  340 - 509   (510 channels: R,G,B × 170)
+  Universe 4: Pixels  510 - 679   (510 channels: R,G,B × 170)
+  Universe 5: Pixels  680 - 849   (510 channels: R,G,B × 170)
+  Universe 6: Pixels  850 - 1019  (510 channels: R,G,B × 170)
+  Universe 7: Pixels 1020 - 1189  (510 channels: R,G,B × 170)
+  Universe 8: Pixels 1190 - 1359  (510 channels: R,G,B × 170)
+  Universe 9: Pixels 1360 - 1499  (420 channels: R,G,B × 140)
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      ADVANCED COLOR CONTROL SYSTEM                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  Three Independent Color Parameters (Channels 4-6):
+
+  🎨 Channel 4: Flicker Intensity (0-255)
+     ├─ 0:   Slow, gentle transitions (2x slower than default)
+     ├─ 127: Normal transition speed
+     └─ 255: Fast, dramatic flickering (2x faster than default)
+
+     Effect: Controls how quickly flames change color and brightness
+            Lower = smooth, meditative flame
+            Higher = energetic, dancing flame
+
+  🟡 Channel 5: Yellow → Red Shift (0-255)
+     ├─ 0:   Maximum yellow (high green component)
+     │       Pure yellow-orange candle color
+     ├─ 127: Warm orange (moderate green reduction)
+     └─ 255: Deep red (70% green reduction)
+     │       Red-orange ember color
+
+     Effect: Reduces green component to shift from yellow to red
+            Simulates temperature: Yellow = hotter, Red = cooler
+
+  🔵 Channel 6: Blue Component (0-255)
+     ├─ 0:   No blue (pure fire colors)
+     ├─ 127: Moderate blue (warm white tint)
+     └─ 255: Maximum blue (white-hot appearance)
+
+     Effect: Adds blue to create white-hot flames
+            Simulates extremely high temperature combustion
+            Independent from yellow/red shift
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        COLOR COMBINATION EXAMPLES                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  Classic Candle:
+  • Ch5 (Y→R): 0%     (yellow)
+  • Ch6 (Blue): 0%    (no blue)
+  → Pure yellow-orange flame
+
+  White-Hot Flame:
+  • Ch5 (Y→R): 0%     (yellow)
+  • Ch6 (Blue): 100%  (maximum blue)
+  → Bright white with yellow tint (like gas flame)
+
+  Deep Red Ember:
+  • Ch5 (Y→R): 100%   (red)
+  • Ch6 (Blue): 0%    (no blue)
+  → Deep red-orange (smoldering coals)
+
+  Warm Orange with Whiteness:
+  • Ch5 (Y→R): 30%    (slight red shift)
+  • Ch6 (Blue): 20%   (touch of blue)
+  → Warm orange with subtle white highlights
+
+  Intense White Fire:
+  • Ch5 (Y→R): 0%     (yellow)
+  • Ch6 (Blue): 50%   (moderate blue)
+  • Ch4 (Flicker): 100% (fast)
+  → Bright, energetic white-yellow flame
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         FIRE EFFECT ALGORITHM                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  🔥 SmoothFirePixel Color Generation:
+
+     1. Red Component (R):
+        • Always high: 90-100% of 255
+        • Slight random variation per pixel
+        • Base: random(230, 255)
+
+     2. Green Component (G):
+        • Normal distribution: mean=55%, std=15%
+        • Clamped to 30-80% range
+        • Modified by Ch5 (Y→R shift):
+          green = green × (1.0 - channel5 × 0.7)
+        • Creates yellow (high G) to red (low G) spectrum
+
+     3. Blue Component (B):
+        • Random base: 30-100
+        • Scaled by Ch6 (blue amount):
+          blue = base_blue × channel6
+        • Independent control for white-hot appearance
+
+     4. Transitions:
+        • Smooth interpolation between colors
+        • Variable speed: 0.05s to 2.5s per transition
+        • Smoothstep easing function
+        • Speed modified by Ch4 (flicker intensity)
+
+     5. Brightness Waxing/Waning:
+        • Sine wave intensity modulation
+        • Base intensity: 40-90% (random per pixel)
+        • Phase offset: randomized
+        • Creates natural flickering rhythm
+
+     6. Rare Special Colors (1% chance):
+        • White-hot flash: RGB(255, 255, 200)
+        • Blue flame flash: RGB(100, 150, 255)
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      PERFORMANCE OPTIMIZATIONS                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  ⚡ Ultra-Low Latency:
+     • Serial timeout: 1ms (minimal delay)
+     • Buffer draining: up to 10 DMX packets per frame
+     • Non-blocking I/O throughout
+
+  📊 Noise Reduction:
+     • Hysteresis filtering: ignores changes < 2% (5 DMX values)
+     • Smooth interpolation: 30% ramp per frame
+     • Display threshold: only shows banks > 1% intensity
+
+  🔧 Rendering Efficiency:
+     • Pre-allocated universe buffers
+     • Single-threaded (no context switching)
+     • Independent random number generators per pixel
+     • Direct RGB calculation (no palette lookups)
+
+  📈 Monitoring:
+     • Real-time FPS display
+     • DMX packet rate (packets/second)
+     • Latency measurement (ms since last DMX packet)
+     • Active bank status with percentages
+     • Live color control values
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      PLATFORM-SPECIFIC CONFIGURATION                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  ⚠️  CRITICAL: Serial Port Configuration
+
+  macOS (Darwin):
+  • MUST use: /dev/cu.usbserial-EN######
+  • DO NOT use: /dev/tty.usbserial-EN######
+  • Reason: tty devices will HANG indefinitely on open()
+  • Find device: ls -la /dev/cu.usbserial-*
+
+  Windows:
+  • Format: COM3, COM4, COM5, etc.
+  • Find device: Device Manager → Ports (COM & LPT)
+  • Look for: "ENTTEC DMX USB PRO" or "USB Serial Port"
+
+  Linux:
+  • Format: /dev/ttyUSB0, /dev/ttyUSB1, etc.
+  • Find device: ls -la /dev/ttyUSB*
+  • Permissions: sudo usermod -a -G dialout $USER (then logout/login)
+
+  Common Issues:
+  • macOS hang → Using tty instead of cu
+  • "Multiple access on port" → Another process using the serial port
+  • "Permission denied" (Linux) → Not in dialout group
+  • "Device not found" → Unplug and replug ENTTEC, wait 5 seconds
+
+  See ENTTEC_SETUP_GUIDE.md for detailed troubleshooting
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            TECHNICAL DETAILS                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  Hardware:
+  • ENTTEC DMX USB Pro (115200 baud)
+  • Serial port: /dev/cu.usbserial-EN437698 (macOS example)
+  •             COM3 (Windows example)
+  •             /dev/ttyUSB0 (Linux example)
+  • WLED device: 192.168.4.74
+  • LED type: WS2812B (or compatible)
+
+  Software:
+  • Language: Python 3
+  • DMX Library: pyserial (custom ENTTEC implementation)
+  • sACN Library: sacn
+  • Main file: dmx_fire_controller.py
+
+  Network:
+  • Protocol: sACN (Streaming ACN / E1.31)
+  • Unicast transmission (not multicast)
+  • 9 universes (1-9)
+  • 60 FPS target refresh rate
+
+  Processing:
+  • 1,500 pixels × 60 FPS = 90,000 pixel updates/second
+  • Each pixel: independent RNG, color generation, transitions
+  • ~52 FPS sustained (very close to 60 FPS target)
+  • CPU usage: ~18-20% single core
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  Performance: ~52 FPS | DMX Rate: ~90 pkt/s | Latency: 5-80ms                ║
+║  Typical Status: B1:99% B2:99% B3:99% | Flicker:100% | Y→R:29% | Blue:21%   ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          USAGE INSTRUCTIONS                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  Starting the Controller:
+    python3 dmx_fire_controller.py
+
+  Debug Mode (shows real-time DMX values):
+    python3 dmx_fire_controller.py --debug
+
+  Stopping the Controller:
+    Press Ctrl+C
+
+  Killing Hung Processes:
+    lsof -ti :5568 | xargs kill -9
+
+  DMX Console Setup:
+    1. Set console to output DMX Universe 1
+    2. Patch channels 1-6 to faders
+    3. Bring up intensity to see flames
+    4. Adjust color controls to taste
+
+  Recommended Starting Values:
+    • Ch1-3: 255 (all banks full)
+    • Ch4: 127 (medium flicker)
+    • Ch5: 0   (yellow flames)
+    • Ch6: 0   (no blue)
+
+  Color Exploration:
+    1. Start with classic candle (Ch5=0, Ch6=0)
+    2. Add blue gradually (Ch6: 0→100) for white-hot
+    3. Shift to red (Ch5: 0→100) for ember glow
+    4. Mix both for custom colors
+    5. Adjust flicker (Ch4) for desired energy level
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            PROJECT FILES                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  Main Controller:
+  • dmx_fire_controller.py      - Primary integrated controller (1500 LEDs)
+
+  Testing & Reference:
+  • test_dmx_input.py            - DMX input testing utility
+  • fire-effects/fire_flicker.py - Simple single-pixel fire
+  • fire-effects/fire_multi.py   - Multi-pixel independent animation
+  • fire-effects/fire_smooth.py  - Smooth transitions reference
+  • fire-effects/show_control.py - sACN-based show control (original)
+
+  Documentation:
+  • README_DMX_FIRE.md           - DMX fire controller guide
+  • CLAUDE_LIGHTS_REFERENCE.md   - Claude Lights integration
+  • ARCHITECTURE.txt             - This file
+  • CLAUDE.md                    - Project overview
+
+════════════════════════════════════════════════════════════════════════════════
+                           END OF ARCHITECTURE DOCUMENT
+════════════════════════════════════════════════════════════════════════════════
