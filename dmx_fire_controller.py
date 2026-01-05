@@ -6,10 +6,11 @@ Reads DMX input from ENTTEC DMX USB Pro and outputs fire effects via sACN.
 Optimized for minimal latency with single-threaded main loop.
 
 DMX Input Channels (from console):
-- Channel 1-3: Flame Bank 1-3 Intensity (0-255)
-- Channel 4: Flicker Intensity (0-255)
-- Channel 5: Yellow→Red Shift (0-255)
-- Channel 6: Blue Component (0-255)
+- Channel 1: Flicker Speed (color transition speed) (0-255)
+- Channel 2: Color Shift - Yellow←→Red (0=Yellow, 127=Base, 255=Red)
+- Channel 3: Sporadic Flicker (Wind Gust Effect) (0-255)
+- Channel 6: Master Intensity (affects all 13 banks) (0-255)
+- Channel 7-19: Flame Bank 1-13 Individual Intensity (0-255)
 
 sACN Output:
 - Unicast to WLED device
@@ -205,7 +206,7 @@ class SmoothFirePixel:
         # Control parameters (must be set before generating colors)
         self.flicker_intensity = 0.5  # 0.0 to 1.0
         self.color_shift = 0.0  # 0.0 (yellow) to 1.0 (red)
-        self.blue_amount = 0.0  # 0.0 (no blue) to 1.0 (max blue/white-hot)
+        self.sporadic_flicker = 0.0  # 0.0 (no wind gusts) to 1.0 (frequent dramatic flickers)
 
         # Color transition state
         self.current_color = (0, 0, 0)
@@ -218,8 +219,14 @@ class SmoothFirePixel:
         self.intensity_phase = self.rng.uniform(0, 6.28)
         self.intensity_speed = self.rng.uniform(0.5, 3.0)
 
+        # Wind gust / sporadic flicker state
+        self.wind_gust_active = False
+        self.wind_gust_intensity = 1.0  # Multiplier for intensity during gust
+        self.wind_gust_start_time = 0.0
+        self.wind_gust_duration = 0.0
+
     def _generate_fire_color(self) -> tuple:
-        """Generate a fire color using algorithm based on real candle physics."""
+        """Generate a fire color based on custom base color (R:255, G:127, B:15)."""
         # Check for rare special color flash (1% chance)
         if self.rng.random() < 0.01:
             if self.rng.random() < 0.67:
@@ -227,27 +234,33 @@ class SmoothFirePixel:
             else:
                 return (100, 150, 255)  # Blue flame
 
-        # Normal fire color generation
+        # Normal fire color generation based on R:255, G:127, B:15
         intensity = self.rng.uniform(0.6, 1.0)
 
-        # Red: always high (90-100%)
-        red_base = self.rng.uniform(0.90, 1.0)
-        red = int(255 * red_base)
+        # Red: always high, around 255 with slight variation
+        red = self.rng.randint(245, 255)
 
-        # Green: determines the color (yellow vs red-orange)
-        # Base green intensity with normal distribution
-        green_intensity = self.rng.gauss(0.55, 0.15)
-        green_intensity = max(0.3, min(0.8, green_intensity))
+        # Green: base is 127, varies based on color_shift
+        # color_shift 0.0 = yellower (green goes up toward ~170-200)
+        # color_shift 1.0 = redder (green goes down toward ~50-80)
 
-        # Apply color shift: 0.0 = yellow (high green), 1.0 = red (low green)
-        # Shift reduces green, making it more red
-        green_intensity = green_intensity * (1.0 - self.color_shift * 0.7)
-        green = int(255 * green_intensity * math.pow(intensity, 1.1))
+        # Base green variation around 127
+        green_variation = self.rng.gauss(0, 25)  # Normal distribution ±25
+        base_green = 127 + green_variation
 
-        # Blue: independent control for white-hot appearance
-        # blue_amount 0.0 = no blue, 1.0 = max blue (white-hot)
-        base_blue = self.rng.uniform(30, 100)  # Random blue component for variation
-        blue = int(base_blue * self.blue_amount)
+        # Apply color_shift to push green up (yellow) or down (red)
+        # 0.0 = add up to +60 (yellower, max ~187)
+        # 1.0 = subtract up to -60 (redder, min ~67)
+        shift_amount = (self.color_shift - 0.5) * 2.0  # Map 0-1 to -1 to +1
+        green_shift = -shift_amount * 60  # Negative shift makes it yellow, positive makes it red
+
+        green = base_green + green_shift
+        green = max(50, min(200, green))  # Clamp to reasonable range
+        green = int(green * intensity)  # Apply intensity variation
+
+        # Blue: base is 15, with slight variation
+        blue_base = 15 + self.rng.randint(-5, 10)
+        blue = max(0, min(30, blue_base))
 
         return (red, green, blue)
 
@@ -269,25 +282,34 @@ class SmoothFirePixel:
             self.target_color = self._generate_fire_color()
             self.transition_start_time = current_time
 
-            # Random transition speed influenced by flicker_intensity
-            # Higher flicker = faster, more dramatic transitions
-            # Lower flicker = slower, more gentle transitions
-            transition_type = self.rng.random()
-            if transition_type < 0.3:
-                # Quick flicker
-                base_range = (0.05, 0.2)
-            elif transition_type < 0.7:
-                # Medium transition
-                base_range = (0.3, 0.8)
-            else:
-                # Slow slide
-                base_range = (1.0, 2.5)
+            # Check if this is a special flash color (white-hot or blue flame)
+            is_white_flash = (self.target_color[0] == 255 and self.target_color[1] == 255 and self.target_color[2] == 200)
+            is_blue_flash = (self.target_color[0] == 100 and self.target_color[1] == 150 and self.target_color[2] == 255)
 
-            # Scale duration by flicker intensity (inverted: high flicker = short duration)
-            duration = self.rng.uniform(*base_range)
-            # Flicker intensity: 0.0 = 2x slower, 0.5 = normal, 1.0 = 2x faster
-            speed_multiplier = 2.0 - self.flicker_intensity
-            self.transition_duration = duration * speed_multiplier
+            if is_white_flash or is_blue_flash:
+                # Special flash: very short duration (100-250ms)
+                self.transition_duration = self.rng.uniform(0.1, 0.25)
+            else:
+                # Normal fire color transitions
+                # Random transition speed influenced by flicker_intensity
+                # Higher flicker = faster, more dramatic transitions
+                # Lower flicker = slower, more gentle transitions
+                transition_type = self.rng.random()
+                if transition_type < 0.3:
+                    # Quick flicker
+                    base_range = (0.05, 0.2)
+                elif transition_type < 0.7:
+                    # Medium transition
+                    base_range = (0.3, 0.8)
+                else:
+                    # Slow slide
+                    base_range = (1.0, 2.5)
+
+                # Scale duration by flicker intensity (inverted: high flicker = short duration)
+                duration = self.rng.uniform(*base_range)
+                # Flicker intensity: 0.0 = 2x slower, 0.5 = normal, 1.0 = 2x faster
+                speed_multiplier = 2.0 - self.flicker_intensity
+                self.transition_duration = duration * speed_multiplier
 
         # Calculate interpolation progress
         t = elapsed / self.transition_duration if self.transition_duration > 0 else 1.0
@@ -304,6 +326,46 @@ class SmoothFirePixel:
 
         # Blend base intensity with variation
         total_intensity = self.base_intensity * (0.6 + 0.4 * intensity_variation)
+
+        # Wind gust / sporadic flicker effect
+        wind_multiplier = 1.0
+        if self.sporadic_flicker > 0.01:  # Only if sporadic flicker is enabled
+            # Check if we should trigger a new wind gust
+            if not self.wind_gust_active:
+                # Probability of triggering a gust per frame (at 60 FPS)
+                # sporadic_flicker = 0.0: never
+                # sporadic_flicker = 0.5: ~2% chance per frame = ~1x per second
+                # sporadic_flicker = 1.0: ~5% chance per frame = ~3x per second
+                gust_probability = self.sporadic_flicker * 0.05
+                if self.rng.random() < gust_probability:
+                    # Trigger wind gust!
+                    self.wind_gust_active = True
+                    self.wind_gust_start_time = current_time
+                    # Gust duration: 0.05 to 0.4 seconds (quick drop and recovery)
+                    self.wind_gust_duration = self.rng.uniform(0.05, 0.4)
+                    # Intensity drop: 20% to 90% reduction
+                    self.wind_gust_intensity = self.rng.uniform(0.1, 0.8)
+
+            # Apply active wind gust
+            if self.wind_gust_active:
+                gust_elapsed = current_time - self.wind_gust_start_time
+                if gust_elapsed < self.wind_gust_duration:
+                    # During gust: ramp down then back up
+                    gust_progress = gust_elapsed / self.wind_gust_duration
+                    # Triangle wave: down to minimum at 0.5, back up at 1.0
+                    if gust_progress < 0.5:
+                        # Dropping (0.0 -> 0.5)
+                        wind_multiplier = 1.0 - (gust_progress * 2.0) * (1.0 - self.wind_gust_intensity)
+                    else:
+                        # Recovering (0.5 -> 1.0)
+                        wind_multiplier = self.wind_gust_intensity + ((gust_progress - 0.5) * 2.0) * (1.0 - self.wind_gust_intensity)
+                else:
+                    # Gust complete
+                    self.wind_gust_active = False
+                    wind_multiplier = 1.0
+
+        # Apply total intensity with wind effect
+        total_intensity *= wind_multiplier
 
         r = int(r * total_intensity)
         g = int(g * total_intensity)
@@ -325,7 +387,7 @@ class FlameBank:
         # Global fire parameters (shared by all pixels)
         self.flicker_intensity = 0.5  # 0.0 to 1.0
         self.color_shift = 0.0  # 0.0 (yellow) to 1.0 (red)
-        self.blue_amount = 0.0  # 0.0 (no blue) to 1.0 (white-hot)
+        self.sporadic_flicker = 0.0  # 0.0 (no wind gusts) to 1.0 (frequent dramatic flickers)
 
         # Create fire pixel objects
         for idx in pixel_indices:
@@ -363,7 +425,7 @@ class FlameBank:
                 # Apply global fire parameters to each pixel
                 fire_pixel.flicker_intensity = self.flicker_intensity
                 fire_pixel.color_shift = self.color_shift
-                fire_pixel.blue_amount = self.blue_amount
+                fire_pixel.sporadic_flicker = self.sporadic_flicker
 
                 r, g, b = fire_pixel.update(current_time)
                 # Apply bank intensity
@@ -395,23 +457,26 @@ class DMXFireController:
                  output_ip: str,
                  output_universe_start: int,
                  total_pixels: int,
-                 spacing: int = 51):
+                 spacing: int = 1,
+                 use_multicast: bool = True):
         """
         Initialize the integrated controller.
 
         Args:
             dmx_serial_port: Serial port for ENTTEC device
             dmx_universe: Logical input universe number (for display only)
-            output_ip: IP address of WLED device
+            output_ip: IP address of WLED device (used for unicast mode)
             output_universe_start: Starting sACN universe for output
             total_pixels: Total number of LEDs
             spacing: Spacing between fire pixels (every Nth pixel)
+            use_multicast: True for multicast (multi-WLED), False for unicast
         """
         self.dmx_universe = dmx_universe
         self.output_ip = output_ip
         self.output_universe_start = output_universe_start
         self.total_pixels = total_pixels
         self.spacing = spacing
+        self.use_multicast = use_multicast
 
         print(f"\n🔥 DMX Fire Controller - Low Latency Edition")
         print(f"=" * 70)
@@ -420,39 +485,97 @@ class DMXFireController:
         print(f"\n📡 DMX Input:")
         print(f"   Port: {dmx_serial_port}")
         print(f"   Universe: {dmx_universe} (logical)")
-        print(f"   Channels: 1-3 (Banks), 4 (Flicker), 5 (Yellow→Red), 6 (Blue)")
+        print(f"   Channels: 1 (Speed), 2 (Yellow←→Red), 3 (Wind), 6 (Master), 7-19 (Banks)")
+        print(f"   Base Color: RGB(255, 127, 15)")
 
         self.dmx_input = EnttecDMXProInput(dmx_serial_port)
         time.sleep(0.2)  # Let device initialize
         print(f"   ✓ ENTTEC DMX USB Pro ready")
 
-        # Create flame banks (3 banks, evenly divided)
+        # Create flame banks (13 banks, with gap between WLED boxes)
+        # WLED ONE: Banks 1-7 (125 LEDs each = 875 pixels, universes 1-6)
+        # GAP: 145 pixels (875-1019) - unused, between universes 6 and 7
+        # WLED TWO: Banks 8-13 starting at universe 7 (pixel 1020)
+        #   Banks 8-10: 125 LEDs each
+        #   Banks 11-13: 150 LEDs each
         print(f"\n🔥 Flame Banks:")
-        pixels_per_bank = total_pixels // 3
-        self.flame_banks = []
+        bank_sizes = [125] * 7  # WLED ONE banks
+        bank_sizes += [125] * 3 + [150] * 3  # WLED TWO banks
 
-        for bank_id in range(3):
-            start_idx = bank_id * pixels_per_bank
-            end_idx = start_idx + pixels_per_bank if bank_id < 2 else total_pixels
+        self.flame_banks = []
+        current_pixel = 0
+
+        for bank_id, bank_size in enumerate(bank_sizes):
+            start_idx = current_pixel
+            end_idx = start_idx + bank_size
+
+            # After bank 7 (WLED ONE), skip to universe 7 (pixel 1020)
+            if bank_id == 7:
+                current_pixel = 1020  # Start of universe 7
+                start_idx = current_pixel
+                end_idx = start_idx + bank_size
+
             # Every Nth pixel in this range gets fire
             pixel_indices = list(range(start_idx, end_idx, spacing))
             self.flame_banks.append(FlameBank(bank_id + 1, pixel_indices))
-            print(f"   Bank {bank_id + 1}: {len(pixel_indices)} flames "
-                  f"(pixels {start_idx:4d}-{end_idx-1:4d}, every {spacing}th)")
 
-        # Global fire effect parameters (controlled by DMX channels 4-6)
+            if bank_id == 6:
+                print(f"   Bank {bank_id + 1:2d}: {len(pixel_indices):4d} flames "
+                      f"(pixels {start_idx:4d}-{end_idx-1:4d}) → WLED ONE")
+                print(f"   --- GAP: pixels 875-1019 (145 pixels, unused) ---")
+            elif bank_id == 7:
+                print(f"   Bank {bank_id + 1:2d}: {len(pixel_indices):4d} flames "
+                      f"(pixels {start_idx:4d}-{end_idx-1:4d}) → WLED TWO")
+            else:
+                box = "WLED ONE" if bank_id < 7 else "WLED TWO"
+                print(f"   Bank {bank_id + 1:2d}: {len(pixel_indices):4d} flames "
+                      f"(pixels {start_idx:4d}-{end_idx-1:4d}) → {box}")
+
+            current_pixel = end_idx
+
+        # Global fire effect parameters (controlled by DMX channels 1-3)
         self.global_flicker_intensity = 0.5  # Default: medium flicker
         self.global_color_shift = 0.0  # Default: yellow
-        self.global_blue_amount = 0.0  # Default: no blue
+        self.global_sporadic_flicker = 0.0  # Default: no wind gusts
+
+        # Master intensity (controlled by DMX channel 6)
+        self.master_intensity = 1.0  # Default: full intensity
+        self.target_master_intensity = 1.0
 
         # Calculate output universes
         self.leds_per_universe = 512 // 3  # 170 LEDs per universe
         self.num_universes = (total_pixels + self.leds_per_universe - 1) // self.leds_per_universe
 
+        # Calculate bank split for dual-WLED setup
+        # Banks 1-6 go to first group, Banks 7-13 go to second group
+        num_banks = len(self.flame_banks)
+        self.banks_group1 = self.flame_banks[:6]  # Banks 1-6
+        self.banks_group2 = self.flame_banks[6:]  # Banks 7-13
+
+        # Calculate pixels for each group
+        group1_pixels = sum(len(b.pixel_indices) for b in self.banks_group1)
+        group2_pixels = sum(len(b.pixel_indices) for b in self.banks_group2)
+        group1_max_pixel = max((max(b.pixel_indices) for b in self.banks_group1), default=0)
+        group2_min_pixel = min((min(b.pixel_indices) for b in self.banks_group2), default=0)
+
+        # Calculate universe ranges
+        # Group 1 starts at output_universe_start
+        group1_universes = (group1_max_pixel // self.leds_per_universe) + 1
+        # Group 2 starts right after group 1
+        group2_start_universe = output_universe_start + group1_universes
+        group2_universes = self.num_universes - group1_universes
+
         # Initialize sACN sender
         print(f"\n📤 sACN Output:")
-        print(f"   Destination: {output_ip}")
-        print(f"   Universes: {output_universe_start}-{output_universe_start + self.num_universes - 1} ({self.num_universes} total)")
+        if use_multicast:
+            print(f"   Mode: MULTICAST")
+            print(f"   Total Universes: {output_universe_start}-{output_universe_start + self.num_universes - 1} ({self.num_universes} total)")
+            print(f"   WLED ONE: Universes {output_universe_start}-{output_universe_start + group1_universes - 1} (Banks 1-6, ~{group1_pixels} flames)")
+            print(f"   WLED TWO: Universes {group2_start_universe}-{output_universe_start + self.num_universes - 1} (Banks 7-13, ~{group2_pixels} flames)")
+        else:
+            print(f"   Mode: UNICAST")
+            print(f"   Destination: {output_ip}")
+            print(f"   Universes: {output_universe_start}-{output_universe_start + self.num_universes - 1} ({self.num_universes} total)")
         print(f"   Total LEDs: {total_pixels}")
 
         self.sender = sacn.sACNsender()
@@ -461,8 +584,11 @@ class DMXFireController:
         for i in range(self.num_universes):
             univ = output_universe_start + i
             self.sender.activate_output(univ)
-            self.sender[univ].multicast = False
-            self.sender[univ].destination = output_ip
+            if use_multicast:
+                self.sender[univ].multicast = True
+            else:
+                self.sender[univ].multicast = False
+                self.sender[univ].destination = output_ip
 
         print(f"   ✓ sACN sender ready")
 
@@ -486,26 +612,37 @@ class DMXFireController:
         # Poll for new DMX data (drain buffer)
         packets_received = self.dmx_input.poll()
 
-        # Update flame banks from channels 1-3
-        for i in range(3):
-            dmx_value = self.dmx_input.get_channel(i + 1)
-            self.flame_banks[i].set_intensity(dmx_value)
-
-        # Update global fire parameters from channels 4-6
-        flicker_dmx = self.dmx_input.get_channel(4)
-        color_shift_dmx = self.dmx_input.get_channel(5)
-        blue_dmx = self.dmx_input.get_channel(6)
+        # Update global fire parameters from channels 1-3
+        flicker_dmx = self.dmx_input.get_channel(1)
+        color_shift_dmx = self.dmx_input.get_channel(2)
+        sporadic_flicker_dmx = self.dmx_input.get_channel(3)
 
         # Convert DMX (0-255) to 0.0-1.0
         self.global_flicker_intensity = flicker_dmx / 255.0
         self.global_color_shift = color_shift_dmx / 255.0
-        self.global_blue_amount = blue_dmx / 255.0
+        self.global_sporadic_flicker = sporadic_flicker_dmx / 255.0
 
-        # Apply to all banks
+        # Update master intensity from channel 6
+        master_dmx = self.dmx_input.get_channel(6)
+        target = master_dmx / 255.0
+
+        # Hysteresis for master intensity
+        if abs(target - self.target_master_intensity) > 0.02:
+            self.target_master_intensity = target
+
+        # Smooth interpolation for master intensity
+        self.master_intensity += (self.target_master_intensity - self.master_intensity) * 0.3
+
+        # Update flame banks from channels 7-19 (13 banks)
+        for i in range(13):
+            dmx_value = self.dmx_input.get_channel(7 + i)
+            self.flame_banks[i].set_intensity(dmx_value)
+
+        # Apply global parameters to all banks
         for bank in self.flame_banks:
             bank.flicker_intensity = self.global_flicker_intensity
             bank.color_shift = self.global_color_shift
-            bank.blue_amount = self.global_blue_amount
+            bank.sporadic_flicker = self.global_sporadic_flicker
 
         return packets_received
 
@@ -520,6 +657,11 @@ class DMXFireController:
             pixel_colors = bank.update(current_time)
 
             for pixel_idx, (r, g, b) in pixel_colors.items():
+                # Apply master intensity
+                r = int(r * self.master_intensity)
+                g = int(g * self.master_intensity)
+                b = int(b * self.master_intensity)
+
                 # Calculate universe and channel
                 universe_idx = pixel_idx // self.leds_per_universe
                 local_pixel_idx = pixel_idx % self.leds_per_universe
@@ -568,15 +710,14 @@ class DMXFireController:
 
                 # Debug output every frame (if enabled)
                 if debug and frame_count % 10 == 0:  # Every 10 frames
-                    ch1 = self.dmx_input.get_channel(1)
-                    ch2 = self.dmx_input.get_channel(2)
-                    ch3 = self.dmx_input.get_channel(3)
-                    ch4 = self.dmx_input.get_channel(4)
-                    ch5 = self.dmx_input.get_channel(5)
-                    ch6 = self.dmx_input.get_channel(6)
-                    print(f"DMX: Ch1:{ch1:3d} Ch2:{ch2:3d} Ch3:{ch3:3d} Ch4:{ch4:3d} Ch5:{ch5:3d} Ch6:{ch6:3d} | "
-                          f"Banks: {self.flame_banks[0].intensity:.2f} {self.flame_banks[1].intensity:.2f} "
-                          f"{self.flame_banks[2].intensity:.2f}")
+                    speed = self.dmx_input.get_channel(1)
+                    color = self.dmx_input.get_channel(2)
+                    wind = self.dmx_input.get_channel(3)
+                    master = self.dmx_input.get_channel(6)
+                    # Show first 5 banks
+                    banks = [self.dmx_input.get_channel(7 + i) for i in range(5)]
+                    print(f"DMX: Speed:{speed:3d} Color:{color:3d} Wind:{wind:3d} Master:{master:3d} | "
+                          f"Banks 1-5: {banks[0]:3d} {banks[1]:3d} {banks[2]:3d} {banks[3]:3d} {banks[4]:3d}")
 
                 # Status report every 5 seconds
                 if frame_start - last_report >= 5.0:
@@ -592,16 +733,35 @@ class DMXFireController:
                     dmx_latency = (time.time() - self.dmx_input.last_packet_time) * 1000  # ms
 
                     # Show active banks (with threshold to avoid noise)
-                    active_banks = [f"B{b.bank_id}:{int(b.intensity*100):3d}%"
-                                   for b in self.flame_banks if b.intensity > 0.01]  # 1% threshold
+                    active_banks = [b for b in self.flame_banks if b.intensity > 0.01]
+                    num_active = len(active_banks)
+
+                    # Show bank status
+                    if num_active == 0:
+                        bank_status = "All OFF"
+                    elif num_active == len(self.flame_banks):
+                        bank_status = f"All 13 ON"
+                    elif num_active <= 5:
+                        # Show individual banks if only a few are active
+                        bank_list = ", ".join([f"B{b.bank_id}" for b in active_banks])
+                        bank_status = f"{num_active} active: {bank_list}"
+                    else:
+                        # Just show count if many are active
+                        bank_status = f"{num_active}/13 active"
 
                     # Show fire parameters
-                    flicker_str = f"Flicker:{int(self.global_flicker_intensity*100):3d}%"
-                    color_str = f"Y→R:{int(self.global_color_shift*100):3d}%"
-                    blue_str = f"Blue:{int(self.global_blue_amount*100):3d}%"
+                    master_str = f"Master:{int(self.master_intensity*100):3d}%"
+                    flicker_str = f"Speed:{int(self.global_flicker_intensity*100):3d}%"
+                    # Color shift interpretation: <50% = Yellow, >50% = Red, 50% = Base
+                    if self.global_color_shift < 0.4:
+                        color_str = f"Color:Yellow"
+                    elif self.global_color_shift > 0.6:
+                        color_str = f"Color:Red"
+                    else:
+                        color_str = f"Color:Base"
+                    wind_str = f"Wind:{int(self.global_sporadic_flicker*100):3d}%"
 
-                    status = " ".join(active_banks) if active_banks else "All OFF"
-                    status += f" | {flicker_str} | {color_str} | {blue_str}"
+                    status = f"{bank_status} | {master_str} | {flicker_str} | {color_str} | {wind_str}"
 
                     print(f"🔥 {fps:5.1f} FPS | DMX:{dmx_rate:5.1f} pkt/s | Latency:{dmx_latency:4.1f}ms | {status}")
                     last_report = frame_start
@@ -663,7 +823,8 @@ if __name__ == "__main__":
         output_ip=config.WLED_IP,
         output_universe_start=config.WLED_UNIVERSE_START,
         total_pixels=config.TOTAL_PIXELS,
-        spacing=config.PIXEL_SPACING
+        spacing=config.PIXEL_SPACING,
+        use_multicast=config.USE_MULTICAST
     )
 
     controller.run(debug=debug_mode)

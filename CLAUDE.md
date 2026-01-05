@@ -1,28 +1,133 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with code in this repository.
 
 ## Project Overview
 
-This is the **1.5k-candles** project. The codebase is currently empty and awaiting initial setup.
+**DMX Fire Controller** - A professional DMX-controlled fire effects system that controls 1,700 individually-animated LED candles across two WLED controllers using multicast sACN.
 
-## Development Environment
+## Architecture
 
-The project has Claude Code configured with:
-- Playwright MCP server enabled for browser automation and testing
-- All project MCP servers enabled by default
+- **Language**: Python 3
+- **Hardware**: ENTTEC DMX USB Pro, 2× WLED controllers, 1,700 WS2812B LEDs
+- **Protocol**: DMX512 input, sACN (E1.31) output via multicast
+- **Performance**: 60 FPS rendering, 3-10ms latency
 
-## Getting Started
+## Key Files
 
-This repository is newly initialized. Common next steps typically include:
-- Initializing package management (npm, yarn, pip, etc.)
-- Setting up project structure and dependencies
-- Configuring build tools and development workflows
-- Adding source code and tests
+- `dmx_fire_controller.py` - Main integrated controller
+- `config.py` - Centralized configuration (USER EDITABLE)
+- `color_finder.py` - RGB color calibration utility
+- `find_enttec.py` - ENTTEC device discovery tool
+- `test_dmx_input.py` - DMX input testing utility
 
-## Notes
+## Documentation
 
-As the codebase develops, this file should be updated to include:
-- Build, test, and lint commands
-- High-level architecture and design patterns
-- Key conventions and coding standards specific to this project
+- `README.md` - Main project documentation
+- `QUICKSTART.md` - 5-minute setup guide
+- `DUAL_WLED_SETUP.md` - Multi-WLED configuration guide
+- `ARCHITECTURE.txt` - Technical architecture details
+- `ENTTEC_SETUP_GUIDE.md` - Platform-specific ENTTEC setup
+
+## Current Configuration
+
+### DMX Channel Mapping
+- **Channel 1**: Flicker Speed (color transition speed)
+- **Channel 2**: Color Shift (Yellow ← → Red)
+- **Channel 3**: Sporadic Flicker (wind gust effect)
+- **Channel 6**: Master Intensity (global brightness control)
+- **Channels 7-19**: Individual bank intensities (13 banks)
+
+### Bank Structure
+- **Banks 1-7**: 125 LEDs each (875 total) → WLED ONE
+- **Gap**: 145 pixels unused (universe boundary alignment)
+- **Banks 8-10**: 125 LEDs each → WLED TWO
+- **Banks 11-13**: 150 LEDs each → WLED TWO
+- **Total**: 1,700 actual LEDs
+
+### Fire Effect Parameters
+- **Base Color**: RGB(255, 127, 15) - custom orange-red
+- **Frame Rate**: 60 FPS
+- **Special Effects**: White-hot flashes (100-250ms), blue flame flashes
+- **Color Control**: Yellow ← → Red shift via Channel 2
+- **Wind Effect**: Sporadic brightness drops via Channel 3
+
+## Running the System
+
+```bash
+# Run the main controller
+python3 dmx_fire_controller.py
+
+# Run with debug output (shows DMX values)
+python3 dmx_fire_controller.py --debug
+
+# Show current configuration
+python3 dmx_fire_controller.py --config
+
+# Find ENTTEC device
+python3 find_enttec.py
+
+# Calibrate colors
+python3 color_finder.py
+```
+
+## Development Notes
+
+### Making Changes
+- **NEVER** hardcode IP addresses - use `config.py`
+- Bank sizes are hardcoded in `dmx_fire_controller.py` for alignment
+- The 145-pixel gap is intentional for universe boundary alignment
+- Multicast is enabled by default (`USE_MULTICAST = True` in config)
+
+### Key Constraints
+- Universe boundaries at 170 LEDs (512 channels ÷ 3)
+- WLED ONE must end before universe 7 (pixel 1020)
+- WLED TWO must start at universe 7 or later
+- Frame timing critical - avoid blocking operations
+
+### Platform-Specific Issues
+- **macOS**: MUST use `/dev/cu.usbserial-*` not `/dev/tty.usbserial-*`
+- **Windows**: Use Device Manager to find COM port
+- **Linux**: User must be in `dialout` group
+
+## Testing
+
+```bash
+# Test DMX input
+python3 test_dmx_input.py
+
+# Test serial port
+python3 test_serial_basic.py
+
+# Validate configuration
+python3 config.py
+```
+
+## Dependencies
+
+```bash
+pip3 install pyserial sacn
+```
+
+## Common Tasks
+
+### Changing Bank Sizes
+Edit `dmx_fire_controller.py` around line 502:
+```python
+bank_sizes = [125] * 7  # WLED ONE banks
+bank_sizes += [125] * 3 + [150] * 3  # WLED TWO banks
+```
+
+### Adjusting Base Color
+Edit the base color in `dmx_fire_controller.py` `_generate_fire_color()` method, or use `color_finder.py` to find new RGB values.
+
+### Switching to Unicast
+Edit `config.py`:
+```python
+USE_MULTICAST = False
+WLED_IP = '192.168.4.220'  # Your WLED's IP
+```
+
+## Reference Code
+
+The `fire-effects/` directory contains reference implementations and test scripts from earlier development iterations. These are kept for reference but are not part of the main system.

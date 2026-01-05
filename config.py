@@ -1,5 +1,5 @@
 """
-Configuration file for 1,500 Candles Fire Controller
+Configuration file for 1,700 Candles Fire Controller
 
 Edit this file to configure your hardware setup.
 """
@@ -31,19 +31,58 @@ DMX_BAUDRATE = 115200  # Do not change - ENTTEC fixed rate
 # WLED Network Configuration
 # =============================================================================
 
-# WLED Device IP Address
-WLED_IP = '192.168.4.74'  # UPDATE THIS FOR YOUR WLED
+# Network Mode
+USE_MULTICAST = True  # True = multicast (multiple WLED boxes), False = unicast (single IP)
+
+# WLED Device IP Address (used when USE_MULTICAST = False)
+WLED_IP = '192.168.4.220'  # UPDATE THIS FOR YOUR WLED (unicast mode only)
 
 # sACN Universe Settings
 WLED_UNIVERSE_START = 1  # First universe for sACN output
 SACN_PORT = 5568  # Standard sACN port (do not change)
 
 # =============================================================================
+# Multi-WLED Configuration (when USE_MULTICAST = True)
+# =============================================================================
+#
+# For dual WLED setup with 13 banks split across 2 boxes:
+#
+# Bank Sizes:
+#   - Banks 1-7: 125 LEDs each (WLED ONE)
+#   - GAP: 145 pixels (unused, between universe 6 and 7)
+#   - Banks 8-10: 125 LEDs each (WLED TWO)
+#   - Banks 11-13: 150 LEDs each (WLED TWO)
+#   Total actual LEDs: 1,700 (875 + 825)
+#
+# WLED BOX ONE:
+#   - Banks: 1-7 (125 LEDs × 7 = 875 pixels)
+#   - Pixels: 0-874
+#   - Universes: 1-6 (partially)
+#   - Configuration:
+#     * Set "Start Universe" to 1
+#     * Set number of LEDs to 875
+#     * Enable E1.31 multicast
+#
+# WLED BOX TWO:
+#   - Banks: 8-13 (125×3 + 150×3 = 825 pixels)
+#   - Pixels: 1020-1844 (starts at universe 7)
+#   - Universes: 7-11
+#   - Configuration:
+#     * Set "Start Universe" to 7
+#     * Set number of LEDs to 825
+#     * Enable E1.31 multicast
+#
+# Both boxes will receive the same multicast stream and pick up only their
+# configured universes.
+#
+# =============================================================================
+
+# =============================================================================
 # LED Strip Configuration
 # =============================================================================
 
 # Total number of LEDs in your strip
-TOTAL_PIXELS = 1500
+TOTAL_PIXELS = 1845  # Includes 145-pixel gap: 875 (WLED ONE) + 145 (gap) + 825 (WLED TWO)
 
 # Fire pixel spacing
 # 1 = every pixel gets fire (1500 flames)
@@ -155,7 +194,7 @@ def validate_config():
 def print_config():
     """Print current configuration."""
     print("=" * 70)
-    print("1,500 Candles Fire Controller - Configuration")
+    print("DMX Fire Controller - Configuration")
     print("=" * 70)
     print(f"\n🖥️  Platform: {platform.system()} ({platform.platform()})")
     print(f"🐍 Python: {platform.python_version()}")
@@ -164,11 +203,23 @@ def print_config():
     print(f"   Universe: {DMX_UNIVERSE} (logical)")
     print(f"   Baudrate: {DMX_BAUDRATE}")
     print(f"\n🌐 WLED Network:")
-    print(f"   IP: {WLED_IP}")
+    print(f"   Mode: {'MULTICAST' if USE_MULTICAST else 'UNICAST'}")
+    if not USE_MULTICAST:
+        print(f"   IP: {WLED_IP}")
     print(f"   Universe: {WLED_UNIVERSE_START}-{WLED_UNIVERSE_START + (TOTAL_PIXELS * 3 // 512)}")
     print(f"   Port: {SACN_PORT}")
+    if USE_MULTICAST:
+        print(f"\n   Dual-WLED Setup:")
+        print(f"   • WLED ONE: Banks 1-7 (875 LEDs), Universes 1-6")
+        print(f"   • GAP: 145 pixels unused (pixels 875-1019)")
+        print(f"   • WLED TWO: Banks 8-13 (825 LEDs), Universes 7-11")
     print(f"\n💡 LED Configuration:")
-    print(f"   Total Pixels: {TOTAL_PIXELS}")
+    print(f"   Total Pixels: {TOTAL_PIXELS} (includes 145-pixel gap)")
+    print(f"   Actual LEDs: 1,700")
+    print(f"   Banks: 13 (controlled via DMX Ch 7-19)")
+    print(f"     • Banks 1-7: 125 LEDs each (WLED ONE)")
+    print(f"     • Banks 8-10: 125 LEDs each (WLED TWO)")
+    print(f"     • Banks 11-13: 150 LEDs each (WLED TWO)")
     print(f"   Spacing: Every {PIXEL_SPACING}{'st' if PIXEL_SPACING == 1 else 'nd' if PIXEL_SPACING == 2 else 'rd' if PIXEL_SPACING == 3 else 'th'} pixel")
     print(f"   Fire Pixels: {TOTAL_PIXELS // PIXEL_SPACING}")
     print(f"\n⚡ Performance:")
