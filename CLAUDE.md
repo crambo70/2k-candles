@@ -109,6 +109,74 @@ python3 config.py
 pip3 install pyserial sacn
 ```
 
+## WSL2 USB Setup (ENTTEC DMX USB Pro)
+
+WSL2 doesn't have native USB access. Use `usbipd-win` to pass the ENTTEC device through.
+
+### One-time Setup (PowerShell as Administrator)
+```powershell
+# Install usbipd-win
+winget install usbipd
+```
+
+### Each Session (PowerShell as Administrator)
+```powershell
+# List USB devices to find ENTTEC (look for "USB Serial Converter" or VID 0403:6001)
+usbipd list
+
+# Bind and attach (replace 1-3 with your actual BUSID)
+usbipd bind --busid 1-3
+usbipd attach --wsl --busid 1-3
+```
+
+### Each Session (WSL2)
+```bash
+# Fix permissions (required after each attach)
+sudo chmod 666 /dev/ttyUSB0
+
+# Or add user to dialout group (persistent, requires WSL restart)
+sudo usermod -a -G dialout $USER
+```
+
+### Verify Connection
+```bash
+ls -la /dev/ttyUSB*
+python3 find_enttec.py
+```
+
+**Note:** The device may appear as `/dev/ttyUSB0` or `/dev/ttyUSB1` - update `config.py` accordingly.
+
+## WSL2 Networking Limitation
+
+**Multicast does NOT work in WSL2.** WSL2 uses NAT networking which doesn't forward multicast traffic to the physical network.
+
+**Solution:** Use dual unicast mode instead:
+```python
+# In config.py
+USE_MULTICAST = False
+WLED_IP = '192.168.1.2'      # WLED ONE
+WLED_IP_TWO = '192.168.1.3'  # WLED TWO
+```
+
+The controller will send universes 1-6 to WLED ONE and universes 7-11 to WLED TWO.
+
+## Critical: Single Instance Only
+
+**WARNING:** Only ONE instance of `dmx_fire_controller.py` should run at a time!
+
+Multiple instances will send conflicting sACN data to WLED boxes, causing erratic flickering that appears random and is difficult to diagnose.
+
+Before starting the controller, always check for and kill existing instances:
+```bash
+# Check for running instances
+ps aux | grep dmx_fire_controller | grep -v grep
+
+# Kill all instances
+pkill -f dmx_fire_controller.py
+```
+
+When using Claude Code to start/stop the controller, background processes may persist even after "killing" them. Always verify with `ps aux` that no instances remain.
+
 ## Common Tasks
 
 ### Changing Bank Sizes

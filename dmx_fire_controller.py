@@ -458,7 +458,8 @@ class DMXFireController:
                  output_universe_start: int,
                  total_pixels: int,
                  spacing: int = 1,
-                 use_multicast: bool = True):
+                 use_multicast: bool = True,
+                 output_ip_two: str = None):
         """
         Initialize the integrated controller.
 
@@ -470,9 +471,11 @@ class DMXFireController:
             total_pixels: Total number of LEDs
             spacing: Spacing between fire pixels (every Nth pixel)
             use_multicast: True for multicast (multi-WLED), False for unicast
+            output_ip_two: IP address of second WLED device (for dual unicast)
         """
         self.dmx_universe = dmx_universe
         self.output_ip = output_ip
+        self.output_ip_two = output_ip_two
         self.output_universe_start = output_universe_start
         self.total_pixels = total_pixels
         self.spacing = spacing
@@ -573,8 +576,13 @@ class DMXFireController:
             print(f"   WLED ONE: Universes {output_universe_start}-{output_universe_start + group1_universes - 1} (Banks 1-6, ~{group1_pixels} flames)")
             print(f"   WLED TWO: Universes {group2_start_universe}-{output_universe_start + self.num_universes - 1} (Banks 7-13, ~{group2_pixels} flames)")
         else:
-            print(f"   Mode: UNICAST")
-            print(f"   Destination: {output_ip}")
+            if output_ip_two:
+                print(f"   Mode: DUAL UNICAST")
+                print(f"   WLED ONE: {output_ip} (Universes 1-6)")
+                print(f"   WLED TWO: {output_ip_two} (Universes 7-11)")
+            else:
+                print(f"   Mode: UNICAST")
+                print(f"   Destination: {output_ip}")
             print(f"   Universes: {output_universe_start}-{output_universe_start + self.num_universes - 1} ({self.num_universes} total)")
         print(f"   Total LEDs: {total_pixels}")
 
@@ -588,7 +596,11 @@ class DMXFireController:
                 self.sender[univ].multicast = True
             else:
                 self.sender[univ].multicast = False
-                self.sender[univ].destination = output_ip
+                # Dual unicast: universes 1-6 to WLED ONE, 7+ to WLED TWO
+                if output_ip_two and univ >= 7:
+                    self.sender[univ].destination = output_ip_two
+                else:
+                    self.sender[univ].destination = output_ip
 
         print(f"   ✓ sACN sender ready")
 
@@ -694,7 +706,7 @@ class DMXFireController:
         start_time = time.time()
         last_report = start_time
         last_dmx_count = 0
-        target_frame_time = 1.0 / 60.0  # 60 FPS
+        target_frame_time = 1.0 / config.TARGET_FPS
 
         try:
             while self.running:
@@ -817,6 +829,9 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # Create controller with config values
+    # Get second WLED IP if configured (for dual unicast)
+    output_ip_two = getattr(config, 'WLED_IP_TWO', None)
+
     controller = DMXFireController(
         dmx_serial_port=config.DMX_SERIAL_PORT,
         dmx_universe=config.DMX_UNIVERSE,
@@ -824,7 +839,8 @@ if __name__ == "__main__":
         output_universe_start=config.WLED_UNIVERSE_START,
         total_pixels=config.TOTAL_PIXELS,
         spacing=config.PIXEL_SPACING,
-        use_multicast=config.USE_MULTICAST
+        use_multicast=config.USE_MULTICAST,
+        output_ip_two=output_ip_two
     )
 
     controller.run(debug=debug_mode)

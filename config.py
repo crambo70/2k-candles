@@ -21,7 +21,7 @@ import platform
 #   Windows: Check Device Manager → Ports (COM & LPT)
 #   Linux:   ls -la /dev/ttyUSB*
 
-DMX_SERIAL_PORT = '/dev/cu.usbserial-EN437698'  # UPDATE THIS FOR YOUR SYSTEM
+DMX_SERIAL_PORT = '/dev/ttyUSB1'  # WSL2 with usbipd passthrough
 
 # DMX Settings
 DMX_UNIVERSE = 1  # Logical DMX universe (for display only)
@@ -32,10 +32,11 @@ DMX_BAUDRATE = 115200  # Do not change - ENTTEC fixed rate
 # =============================================================================
 
 # Network Mode
-USE_MULTICAST = True  # True = multicast (multiple WLED boxes), False = unicast (single IP)
+USE_MULTICAST = False  # True = multicast (multiple WLED boxes), False = unicast (single IP)
 
-# WLED Device IP Address (used when USE_MULTICAST = False)
-WLED_IP = '192.168.4.220'  # UPDATE THIS FOR YOUR WLED (unicast mode only)
+# WLED Device IP Addresses (used when USE_MULTICAST = False)
+WLED_IP = '192.168.1.2'  # WLED ONE - Universes 1-6
+WLED_IP_TWO = '192.168.1.3'  # WLED TWO - Universes 7-11
 
 # sACN Universe Settings
 WLED_UNIVERSE_START = 1  # First universe for sACN output
