@@ -117,26 +117,30 @@ WSL2 doesn't have native USB access. Use `usbipd-win` to pass the ENTTEC device 
 ```powershell
 # Install usbipd-win
 winget install usbipd
-```
 
-### Each Session (PowerShell as Administrator)
-```powershell
-# List USB devices to find ENTTEC (look for "USB Serial Converter" or VID 0403:6001)
+# Find the ENTTEC device (look for "USB Serial Converter" or VID 0403:6001)
 usbipd list
 
-# Bind and attach (replace 1-3 with your actual BUSID)
+# Bind and enable auto-attach (replace 1-3 with your actual BUSID)
 usbipd bind --busid 1-3
-usbipd attach --wsl --busid 1-3
+usbipd attach --wsl --busid 1-3 --auto-attach
 ```
 
-### Each Session (WSL2)
+The `--auto-attach` flag watches for device reconnections. **Note:** The PowerShell window must stay open (minimized is fine) for auto-attach to work.
+
+### One-time Setup (WSL2) - Automatic Permissions
 ```bash
-# Fix permissions (required after each attach)
-sudo chmod 666 /dev/ttyUSB0
+# Create udev rule for automatic permissions
+sudo nano /etc/udev/rules.d/99-enttec.rules
 
-# Or add user to dialout group (persistent, requires WSL restart)
-sudo usermod -a -G dialout $USER
+# Paste this single line:
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", MODE="0666"
+
+# Save (Ctrl+O, Enter, Ctrl+X), then reload:
+sudo udevadm control --reload-rules
 ```
+
+This eliminates the need for `chmod 666` on every attach.
 
 ### Verify Connection
 ```bash
